@@ -15,11 +15,12 @@
 #define IR_FREQ 56000 //56kHz
 #define IR_HIGH 128 //50% duty cycle
 #define IR_LOW  0 //0% duty cycle
-#define IR_ONE  600 //time to wait in ms
-#define IR_ZERO 300
+#define IR_ONE  60 //time to wait in ms
+#define IR_ZERO 30
+#define IR_PAUSE 10
 
 #define DT_PIN  5
-#define SWT_PIN 4
+#define SWT_PIN A0
 #define CLK_PIN 2
 
 int menu_index=0;
@@ -27,26 +28,21 @@ int sub_menu_index = -1; //-1 = no sub menu selected
 int current_sub_index;
 int current_menu_index;
 volatile boolean turn_detected = 0;
-volatile boolean up; 
-/*
-//TODO define submenu structure
-struct submenu{
-	int sub_menu_no, //sub menu ID
-	char* menu_entry,  //string to display
-	unsigned int ir_code //IR code to be transmitted when selected
-};
-*/
-//do everything in flat arrays to avoid nasty pointer actions
+volatile boolean up;
+boolean submitting = false;
 
-String main_menu_entries[]={"Shoot", "Health", "Stats","God mode"};
-#define MAIN_MENU_SIZE 4
-String sub_menu_entries[]={"foo", "bar", "moep","blubb", "huhu"};
-#define sub_main_menu_size 5
+String main_menu_entries[] = {"Shoot1", "Shoot2", "Respawn","Stats", "Health", "Test2"};
+#define MAIN_MENU_SIZE 6
 
 //ir codes stored as string because it's easier to store large amounts of bits (>32) in a somewhat human-readable manner
 // code assumes to be carefully handcrafted including preamble and checksum where necessary
 String ir_codes[] = {
-	"010101110111010101", //e.g. shoot from DAISY with x hit points....
+	"010101110111010101", //Shoot1  e.g. shoot from DAISY with x hit points....
+	"101010101010101010", //Shoot2 e.g. shoot from DAISY with x hit points....
+	"110110110110110110", //Respawn e.g. shoot from DAISY with x hit points....
+	"111000111000111000", //Stats e.g. shoot from DAISY with x hit points....
+	"010101110111010101", //Health e.g. shoot from DAISY with x hit points....
+	"010101110111010101"  //Test2 menu e.g. shoot from DAISY with x hit points....
 };
 
 void setup() {
@@ -61,10 +57,11 @@ void setup() {
 	pinMode(CLK_PIN, INPUT);
 
 	pinMode(SWT_PIN, INPUT);
+        Serial.begin(9600);
 
 	//set IR_PIN (4) to 56kHz
         //initialize all timers except for 0, to save time keeping functions
-        //InitTimersSafe();
+        InitTimersSafe();
 
 	uView.begin();				// start MicroView
 	uView.clear(PAGE);			// clear page
@@ -72,9 +69,7 @@ void setup() {
 	uView.display();
       
         //sets the frequency for the specified pin
-        //success = SetPinFrequencySafe(IR_PIN, IR_FREQ);
-        digitalWrite(IR_PIN,IR_HIGH);
-        digitalWrite(IR_PIN2,HIGH);
+        success = SetPinFrequencySafe(IR_PIN, IR_FREQ);
 
 
         uView.print("Setting up frequency ");
@@ -83,7 +78,6 @@ void setup() {
 		uView.print("failed");
 	} else {
 		uView.print("success");
-		pwmWrite(IR_PIN, IR_HIGH);
 	}
 	uView.display();
 	delay(1000);
@@ -96,7 +90,10 @@ void setup() {
 void isr() {
   static unsigned long last_interrupt_time = 0;
   unsigned long interrupt_time = millis();
-  digitalWrite(IR_PIN,HIGH);
+  //do not do anything when a transmission is in progress
+  if(submitting) {
+    return;
+  }
   
   if(interrupt_time - last_interrupt_time > 5) {
     if(digitalRead(CLK_PIN)){
@@ -107,8 +104,6 @@ void isr() {
     turn_detected = true;
     last_interrupt_time = interrupt_time;
   }
-
- /* */
 }
 
 
@@ -117,12 +112,8 @@ void loop(){
         if(turn_detected) {
             uView.setCursor(4,0);
             if(!up){
-              digitalWrite(IR_PIN,HIGH);
-              digitalWrite(IR_PIN2,LOW);
               menu_index++;
             } else{
-              digitalWrite(IR_PIN,LOW);
-              digitalWrite(IR_PIN2,HIGH);
               menu_index--;
             }
             if(menu_index < 0){
@@ -140,85 +131,64 @@ void loop(){
 
 	//read button
         int swt_state;
-        swt_state = digitalRead(SWT_PIN);
-	if(swt_state == HIGH){
-		if(sub_menu_index == -1) {
-			//no sub selected -> select one now
-			sub_menu_index = 0;
-		} else {
-			if(sub_menu_index == 0){
-				sub_menu_index = -1;
-			} else {
-				//do stuff
-			}
-		}
+        swt_state = analogRead(SWT_PIN);
+        //Serial.println(swt_state);
+	if(swt_state < 10){
+          delay(50);//debounce
+          digitalWrite(IR_PIN2,HIGH);
+          submitting = true;
+          transmit_code(ir_codes[menu_index]);
+          submitting = false;
+          digitalWrite(IR_PIN2,LOW);
 	}
 
-	//draw
-	if(sub_menu_index == -1) {
-		//no sub selected -> move menu index
-
-		draw_main_menu(menu_index);
-
-	} else {
-		draw_sub_menu(menu_index, current_sub_index);
-	}
+	draw_main_menu(menu_index);
 
 	//sleep 5ms
-	//delay(5);
+	delay(5);
 }
 
 void draw_main_menu(int current_index){
         String menu_string;
-        String main_menu_string;
         int i;
-	/*int ibegin = menu_index - 1; //always show at least one on top
-	int i,iend;
-	if(ibegin < 1) {
-		ibegin = 1;
-	}
-	iend = ibegin + 4;
-        if(iend > MAIN_MENU_SIZE) {
-          iend = MAIN_MENU_SIZE - 1;
-        }*/
+
 	for(i = 0; i < MAIN_MENU_SIZE; i++) {
 		if(i==current_index) {
-			menu_string += "# ";
+			menu_string += "#";
 		} else {
-			menu_string += "  ";
+			menu_string += " ";
                 }
                 menu_string = (menu_string + main_menu_entries[i] + "\n");
-		//menu_string += main_menu_entries[i] + "\n";
 	}
 	write_on_screen(menu_string);
 }
 
-void draw_sub_menu(int main_menu, int current_sub_index){
-//	write_on_screen(string);
-};
-
 void write_on_screen(String text){
-	//uView.clear(PAGE);
-	uView.setCursor(0,0);
-	uView.print(text);
-	uView.display();
+  //uView.clear(PAGE);
+  uView.setCursor(0,0);
+  uView.print(text);
+  uView.display();
 };
 
 void transmit_code(String code) {
-/*
-	int i = 0;
-	for(i=0;i < str_len(code);i++){
-		if(code[i]=='1'){
-			pwm_write(IR_PIN,IR_HIGH);
-			delay(IR_ONE);
-		} else {
-			pwm_write(IR_PIN,IR_LOW);
-			delay(IR_ZERO);
-		}
-		pwm_write(IR_PIN,IR_HIGH);
-		delay(IR_PAUSE);
-	}
-*/
+  int i = 0;
+  Serial.println("BEGIN");
+  pwmWrite(IR_PIN,IR_LOW);
+
+
+  for(i=0;i < code.length() ;i++){
+    if(code[i]=='1'){
+      pwmWrite(IR_PIN,IR_HIGH);
+      delay(IR_ONE);
+    } else {
+      pwmWrite(IR_PIN,IR_LOW);
+      delay(IR_ZERO);
+    }
+    pwmWrite(IR_PIN,IR_HIGH);
+    delay(IR_PAUSE);
+  }
+  pwmWrite(IR_PIN,IR_LOW);
+  Serial.println("END");
 };
 
 
