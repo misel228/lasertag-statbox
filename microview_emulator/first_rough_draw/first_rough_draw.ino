@@ -10,95 +10,112 @@
 #include <space03.h>
 #include <string.h>
 
-#define IR_PIN  3
-#define IR_PIN2  6
-#define IR_FREQ 56000 //56kHz
-#define IR_HIGH 128 //50% duty cycle
-#define IR_LOW  0 //0% duty cycle
-#define IR_ONE  60 //time to wait in ms
-#define IR_ZERO 30
-#define IR_PAUSE 10
+//IR transmission
+#define IR_PIN     3     //IR LED
+#define IR_FREQ    56000 //56kHz
+#define IR_HIGH    128   //50% duty cycle
+#define IR_LOW     0     //0% duty cycle
+#define IR_ONE     1200  //time to wait in µs
+#define IR_ZERO    600
+#define IR_SPACE   600
+#define IR_HEADER  2400
 
-#define DT_PIN  5
-#define SWT_PIN A0
-#define CLK_PIN 2
+//rotary dialer
+#define DT_PIN   5
+#define SWT_PIN A0     //no more digital pins left for MicroView (#0 and #1 are used for programming and stuff gets icky)
+#define CLK_PIN  2
+
+#define RED_LED  6
 
 int menu_index=0;
-int sub_menu_index = -1; //-1 = no sub menu selected
-int current_sub_index;
-int current_menu_index;
 volatile boolean turn_detected = 0;
 volatile boolean up;
 boolean submitting = false;
 
-String main_menu_entries[] = {"Shoot1", "Shoot2", "Respawn","Stats", "Health", "Test2"};
+String main_menu_entries[] = {
+  "Shoot1", "Shoot2", "Respawn", "Health", "Test2","Stats"};
 #define MAIN_MENU_SIZE 6
 
-//ir codes stored as string because it's easier to store large amounts of bits (>32) in a somewhat human-readable manner
+// IR codes stored as string because it's easier to store large amounts of bits (>32) in a somewhat human-readable manner
 // code assumes to be carefully handcrafted including preamble and checksum where necessary
 String ir_codes[] = {
-	"010101110111010101", //Shoot1  e.g. shoot from DAISY with x hit points....
-	"101010101010101010", //Shoot2 e.g. shoot from DAISY with x hit points....
-	"110110110110110110", //Respawn e.g. shoot from DAISY with x hit points....
-	"111000111000111000", //Stats e.g. shoot from DAISY with x hit points....
-	"010101110111010101", //Health e.g. shoot from DAISY with x hit points....
-	"010101110111010101"  //Test2 menu e.g. shoot from DAISY with x hit points....
+ //12345678901234567890
+ //--------++++++++--------
+  "00000000000000",           //Shoot1  EAGLE Team Red Damage of 1
+  "00011010101110",           //Shoot2  SNAKE Team Yellow Damage of 75
+  "111010000000010011101000", //Respawn
+  "100000000110000011101000", //Health add health to target player
+  "1xxxxxxxxxxxxxxx11101000", //Test2 menu e.g. shoot from DAISY with x hit points....
+  "...", //Stats see below
 };
 
+// statistic data actually come in three packages which are described here
+String stats_codes[] = {
+  //1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+  //--------++++++++--------++++++++--------++++++++--------++++++++--------++++++++--------++++++++--------++++++++
+   "100001110000001111101000000001010000001101100011000000100010110000000011000001010001011000001101000000000000000011000100",
+ //"100001110000010011101000100001010000000000110101000000011110100000000001000111100000000110011111000000010000000000000000110110110000000111000011000000011100110000000000001100100000000011000101000000011001010100000001110011000000000100101001000000000110010000000001000010010000000111101111000000011101000100000001000011100000000100000111000000010101110100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000011101001",
+ //"100001110000010111101000100001010000000000110101000000011110100000000001000111100000000110011111000000010000000000000000110110110000000111000011000000011100110000000000001100100000000011000101000000011001010100000001110011000000000100101001000000000110010000000001000010010000000111101111000000011101000100000001000011100000000100000111000000010101110100000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000011101001",
+};
+
+
 void setup() {
-        int success = 1;
-	//TODO attach isr_toggle to CLK_PIN
-        attachInterrupt(0,isr,FALLING);
+  int success;
+  //attach isr_toggle to CLK_PIN
+  attachInterrupt(0,isr,FALLING);
 
-	pinMode(IR_PIN, OUTPUT);
-	pinMode(IR_PIN2, OUTPUT);
+  pinMode(IR_PIN, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
 
-	pinMode(DT_PIN, INPUT);
-	pinMode(CLK_PIN, INPUT);
+  pinMode(DT_PIN, INPUT);
+  pinMode(CLK_PIN, INPUT);
 
-	pinMode(SWT_PIN, INPUT);
-        Serial.begin(9600);
+  pinMode(SWT_PIN, INPUT);
+  Serial.begin(9600);
 
-	//set IR_PIN (4) to 56kHz
-        //initialize all timers except for 0, to save time keeping functions
-        InitTimersSafe();
+  //set IR_PIN (4) to 56kHz
+  //initialize all timers except for 0, to save time keeping functions
+  InitTimersSafe();
 
-	uView.begin();				// start MicroView
-	uView.clear(PAGE);			// clear page
-	uView.print("Initiating");	// display HelloWorld
-	uView.display();
-      
-        //sets the frequency for the specified pin
-        success = SetPinFrequencySafe(IR_PIN, IR_FREQ);
+  //IMPORTANT - init MicroView *after* timer!
+  uView.begin();              // start MicroView
+  uView.clear(PAGE);
+  uView.print("Initiating");
+  uView.display();
 
+  uView.print("Setting up frequency ");
+  success = SetPinFrequencySafe(IR_PIN, IR_FREQ);
 
-        uView.print("Setting up frequency ");
-	//uView.setCursor(0,0);
-	if(!success){
-		uView.print("failed");
-	} else {
-		uView.print("success");
-	}
-	uView.display();
-	delay(1000);
-	pwmWrite(IR_PIN, IR_LOW);
-	uView.clear(PAGE);			// clear page
-	uView.display();
+  if(!success){
+    uView.print("failed");
+  } 
+  else {
+    uView.print("success");
+    pwmWrite(RED_LED,HIGH);
+  }
+  uView.display();
+  delay(1000);
+  pwmWrite(RED_LED,LOW);
+  pwmWrite(IR_PIN, IR_LOW);
+  uView.clear(PAGE);
+  uView.display();
 }
 
 
-void isr() {
+void isr() {  
   static unsigned long last_interrupt_time = 0;
   unsigned long interrupt_time = millis();
-  //do not do anything when a transmission is in progress
+
+  //don't do anything when a transmission is in progress
   if(submitting) {
     return;
   }
-  
+
   if(interrupt_time - last_interrupt_time > 5) {
     if(digitalRead(CLK_PIN)){
       up = digitalRead(DT_PIN);
-    }else{
+    } 
+    else {
       up = !digitalRead(DT_PIN);
     }
     turn_detected = true;
@@ -108,87 +125,84 @@ void isr() {
 
 
 void loop(){
-	//rotary switch is read by interrupt here we handle the rest
-        if(turn_detected) {
-            uView.setCursor(4,0);
-            if(!up){
-              menu_index++;
-            } else{
-              menu_index--;
-            }
-            if(menu_index < 0){
-              menu_index = 0;
-            }
+  //check if rotary switch was turned and add accordingly
+  if(turn_detected) {
+    if(!up){
+      menu_index++;
+    } 
+    else{
+      menu_index--;
+    }
 
-            if(menu_index > (MAIN_MENU_SIZE -1)){
-              menu_index = (MAIN_MENU_SIZE -1);
-            }
-                 
-          turn_detected = false;
-        }
+    if(menu_index < 0){
+      menu_index = 0;
+    }
+    if(menu_index > (MAIN_MENU_SIZE -1)){
+      menu_index = (MAIN_MENU_SIZE -1);
+    }
 
+    turn_detected = false;
+  }
 
+  //read button
+  int swt_state;
+  swt_state = analogRead(SWT_PIN);
 
-	//read button
-        int swt_state;
-        swt_state = analogRead(SWT_PIN);
-        //Serial.println(swt_state);
-	if(swt_state < 10){
-          delay(50);//debounce
-          digitalWrite(IR_PIN2,HIGH);
-          submitting = true;
-          transmit_code(ir_codes[menu_index]);
-          submitting = false;
-          digitalWrite(IR_PIN2,LOW);
-	}
+  if(swt_state < 10){
+    delay(50);  //debounce
+    digitalWrite(RED_LED,HIGH);
+    //TODO special treatment for STATS packages
+    submitting = true;
+    transmit_code(ir_codes[menu_index]);
+    submitting = false;
+    digitalWrite(RED_LED,LOW);
+  }
 
-	draw_main_menu(menu_index);
+  draw_main_menu(menu_index);
 
-	//sleep 5ms
-	delay(5);
+  delay(5);
 }
 
 void draw_main_menu(int current_index){
-        String menu_string;
-        int i;
+  String menu_string;
+  int i;
 
-	for(i = 0; i < MAIN_MENU_SIZE; i++) {
-		if(i==current_index) {
-			menu_string += "#";
-		} else {
-			menu_string += " ";
-                }
-                menu_string = (menu_string + main_menu_entries[i] + "\n");
-	}
-	write_on_screen(menu_string);
-}
-
-void write_on_screen(String text){
-  //uView.clear(PAGE);
+  for(i = 0; i < MAIN_MENU_SIZE; i++) {
+    if(i==current_index) {
+      menu_string += "#";
+    } 
+    else {
+      menu_string += " ";
+    }
+    menu_string = (menu_string + main_menu_entries[i] + "\n");
+  }
   uView.setCursor(0,0);
-  uView.print(text);
+  uView.print(menu_string);
   uView.display();
-};
+}
 
 void transmit_code(String code) {
   int i = 0;
   Serial.println("BEGIN");
+  pwmWrite(IR_PIN,IR_HIGH);
+  delayMicroseconds(IR_HEADER);
   pwmWrite(IR_PIN,IR_LOW);
-
+  delayMicroseconds(IR_SPACE);
 
   for(i=0;i < code.length() ;i++){
-    if(code[i]=='1'){
-      pwmWrite(IR_PIN,IR_HIGH);
-      delay(IR_ONE);
-    } else {
-      pwmWrite(IR_PIN,IR_LOW);
-      delay(IR_ZERO);
-    }
     pwmWrite(IR_PIN,IR_HIGH);
-    delay(IR_PAUSE);
+    if(code[i]=='1'){
+      delayMicroseconds(IR_ONE);
+    } 
+    else {
+      delayMicroseconds(IR_ZERO);
+    }
+    pwmWrite(IR_PIN,IR_LOW);
+    delayMicroseconds(IR_SPACE);
   }
   pwmWrite(IR_PIN,IR_LOW);
   Serial.println("END");
 };
+
 
 
