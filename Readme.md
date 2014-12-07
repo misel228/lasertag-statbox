@@ -9,10 +9,5 @@ A statistics box for Lasertag (we're only at the beginning)
 
 ## Content ##
 
-### microview\_led_finder ###
-An iterator to find out which pin is which
-
-### microview\_led_test ###
-Generates a PWM signal
-
-![picture alt](/images/76kHz.png "Actually we need 56kHz but that should not be such a big deal any longer :)") 
+### emulator ###
+Since I don't have continuous access to a laser tag marker I had to build my own ...  sort of ;)
