@@ -27,9 +27,12 @@
 #define CLK_PIN  2
 
 #define RED_LED  6
+#define CHUNK_SIZE 80
+
+//#define DEBUG true
 
 int menu_index=5;
-int count = 0;
+int count,looper = 0;
 volatile boolean turn_detected = 0;
 volatile boolean up;
 boolean submitting = false;
@@ -187,11 +190,15 @@ void isr() {
 
 
 void loop(){
-  if(count++ > 100) {
-    count=0;
+  if(count > 100) {
+    count = 0;
     Serial.println(".");
   } else {
-    Serial.print('.');
+    if(looper++ > 100) {
+      Serial.print('.');
+      looper = 0;
+      count++;
+    }
   }
   //check if rotary switch was turned and add accordingly
   if(turn_detected) {
@@ -219,11 +226,9 @@ void loop(){
   if(swt_state < 10){
     delay(150);  //debounce
     count=0;
+    Serial.println("#");
     digitalWrite(RED_LED,HIGH);
     submitting = true;
-    Serial.println("#");
-    Serial.println("Disabling interrupts");
-    //noInterrupts();
     if(menu_index < 5){
       strcpy_P(buffer, (char*)pgm_read_word(&(ir_codes_table[menu_index])));
       transmit_code(buffer);
@@ -232,11 +237,16 @@ void loop(){
       Serial.println("Transmit stats");
       delay(500);
       for(int i=0; i < 3; i++) {
-        transmit_large(stat_codes_table[i],stat_code_sizes[i]);
+        void* address   = (void*)pgm_read_word(stat_codes_table + i);
+        Serial.print("Address is ");
+        Serial.println((int)address);
+
+        int code_size = (int)pgm_read_word(stat_code_sizes + i);
+        Serial.print("Codesize is ");
+        Serial.println(code_size);
+        transmit_large(address,code_size);
       }
     }
-    //interrupts();
-    Serial.println("interrupts enabled");
     submitting = false;
     digitalWrite(RED_LED,LOW);
   }
@@ -290,32 +300,34 @@ void transmit_code(String code) {
   Serial.println("END");
 };
 
-void transmit_large(const char *stat_code, int bytes) {
-  int i = 0;
+void transmit_large(void* stat_code, int bytes) {
+  int i,j = 0;
   int bytes_left = bytes;
-  int bytes_to_read = 100;
-  char *buffer[101];
-  String code = "foo";
+  int bytes_to_read = CHUNK_SIZE;
+  char buffer[CHUNK_SIZE + 1] = {0};
 
   Serial.println("BEGIN RAW");
-  //return;
-  
-  Serial.println(bytes_left);
-  while(bytes_left > 0){
-    bytes_left -= 100;
-    Serial.println(bytes_left);
-    if(bytes_left > 100 ){
-      bytes_to_read = 100;
+
+  pwmWrite(IR_PIN,IR_HIGH);
+  delayMicroseconds(IR_HEADER);
+  pwmWrite(IR_PIN,IR_LOW);
+  delayMicroseconds(IR_SPACE);
+
+  do{
+    if(bytes_left   > CHUNK_SIZE ){
+      bytes_to_read = CHUNK_SIZE;
+      bytes_left   -= CHUNK_SIZE;
     } else {
       bytes_to_read = bytes_left;
+      bytes_left = 0;
     }
-    memcpy_P(buffer, (char*)pgm_read_word(&stat_code), bytes_to_read);
+    void* address = (void*)((int)stat_code + (i * CHUNK_SIZE));
+    memcpy_P(buffer, address, bytes_to_read);
 
-    Serial.println((char*) buffer);
 
-    /*for(i=0;i < code.length() ;i++){
+    for(j = 0; j < bytes_to_read ;j++){
       pwmWrite(IR_PIN,IR_HIGH);
-      if(code[i]=='1'){
+      if(buffer[j]=='1'){
         delayMicroseconds(IR_ONE);
       } 
       else {
@@ -323,13 +335,15 @@ void transmit_large(const char *stat_code, int bytes) {
       }
       pwmWrite(IR_PIN,IR_LOW);
       delayMicroseconds(IR_SPACE);
-    }*/
-    Serial.println("bits transmitted: " + i);
+    }
 
-  }
+    #if defined(DEBUG)
+      Serial.println((char*)buffer);
+    #endif
+    i++;
+  } while(bytes_left > 0);
 
 
   Serial.println("END");
-  //*/
 };
 
