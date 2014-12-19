@@ -9,6 +9,7 @@
 #include <space02.h>
 #include <space03.h>
 #include <string.h>
+#include <avr/pgmspace.h>
 
 //IR transmission
 #define IR_PIN     3     //IR LED
@@ -26,35 +27,45 @@
 #define CLK_PIN  2
 
 #define RED_LED  6
+#define CHUNK_SIZE 80
 
-int menu_index=0;
+//#define DEBUG true
+
+int menu_index=5;
+int count,looper = 0;
 volatile boolean turn_detected = 0;
 volatile boolean up;
 boolean submitting = false;
 
-PROGMEM String main_menu_entries[] = {
+String main_menu_entries[] = {
   "Shoot1", "Shoot2", "Respawn", "Health", "Test2","Stats"};
 #define MAIN_MENU_SIZE 6
 
+
 // IR codes stored as string because it's easier to store large amounts of bits (>32) in a somewhat human-readable manner
 // code assumes to be carefully handcrafted including checksum where necessary
-PROGMEM String ir_codes[] = {
- //12345678901234567890
- //--------++++++++--------
-  "00000000000000",           //Shoot1  EAGLE Team Red Damage of 1
-  "00011010101110",           //Shoot2  SNAKE Team Yellow Damage of 75
-  "111010000000010011101000", //Respawn
-  "100000000110000011101000", //Health add health to target player
-  "1xxxxxxxxxxxxxxx11101000", //Test2 menu e.g. shoot from DAISY with x hit points....
-  "...", //Stats see below
+prog_char ir_code_0[] PROGMEM = "00000000000000";
+prog_char ir_code_1[] PROGMEM = "00011010101110";
+prog_char ir_code_2[] PROGMEM = "111010000000010011101000";
+prog_char ir_code_3[] PROGMEM = "100000000110000011101000";
+prog_char ir_code_4[] PROGMEM = "Test2";
+prog_char ir_code_5[] PROGMEM = "Stats";
+
+PROGMEM const char *ir_codes_table[] = {   
+  ir_code_0,
+  ir_code_1,
+  ir_code_2,
+  ir_code_3,
+  ir_code_4,
+  ir_code_5
 };
 
+char buffer[100];
+
+
 // statistic data actually come in three packages which are described here
-PROGMEM String stats_codes[] = {
-  //1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
-  //--------++++++++--------++++++++--------++++++++--------++++++++--------++++++++--------++++++++--------++++++++
-   "100001110000001111101000000001010000001101100011000000100010110000000011000001010001011000001101000000000000000011000100",
-  "10000101000000000011010100000001111010000000000100011110000000011001111100000001"
+prog_char stat_code_0[] PROGMEM = "100001110000001111101000000001010000001101100011000000100010110000000011000001010001011000001101000000000000000011000100";
+prog_char stat_code_1[] PROGMEM = "10000101000000000011010100000001111010000000000100011110000000011001111100000001"
     "00000000000000001101101100000001110000110000000111001100000000000011001000000000"
     "11000101000000011001010100000001110011000000000100101001000000000110010000000001"
     "00001001000000011110111100000001110100010000000100001110000000010000011100000001"
@@ -75,8 +86,8 @@ PROGMEM String stats_codes[] = {
     "00000000000000000000000000000000000000000000000000000000000000000000000000000000"
     "00000000000000000000000000000000000000000000000000000000000000000000000000000000"
     "00000000000000000000000000000000000000000000000000000000000000000000000000000000"
-    "000000000000000011101001",
-  "00010110000000001010111100000010000110000000000110000010000000111011001000000010"
+    "000000000000000011101001";
+prog_char stat_code_2[] PROGMEM = "00010110000000001010111100000010000110000000000110000010000000111011001000000010"
     "00000000000000001100100000000011000110110000000000011010000000011001111100000011"
     "11110100000000000111100000000001100111000000001111011010000000000100010000000001"
     "00010001000000000000101100000000000010110000000001011111000000010110101100000000"
@@ -97,15 +108,30 @@ PROGMEM String stats_codes[] = {
     "00000000000000000000000000000000000000000000000000000000000000000000000000000000"
     "00000000000000000000000000000000000000000000000000000000000000000000000000000000"
     "00000000000000000000000000000000000000000000000000000000000000000000000000000000"
-    "000000000000000000111111"
+    "000000000000000000111111";
+
+PROGMEM const char *stat_codes_table[] = {   
+  stat_code_0,
+  stat_code_1,
+  stat_code_2
 };
 
+//stat code sizes +1 for final null byte
+PROGMEM const int stat_code_sizes[] = {   
+  121,
+  1705,
+  1705
+};
 
 void setup() {
   int success;
+  Serial.begin(9600);
+
+  Serial.println("attach ISR");
   //attach isr_toggle to CLK_PIN
   attachInterrupt(0,isr,FALLING);
 
+  Serial.println("setting up pins");
   pinMode(IR_PIN, OUTPUT);
   pinMode(RED_LED, OUTPUT);
 
@@ -113,19 +139,21 @@ void setup() {
   pinMode(CLK_PIN, INPUT);
 
   pinMode(SWT_PIN, INPUT);
-  Serial.begin(9600);
 
-  //set IR_PIN (4) to 56kHz
+  Serial.println("init timer");
   //initialize all timers except for 0, to save time keeping functions
   InitTimersSafe();
 
+  Serial.println("init Display");
   //IMPORTANT - init MicroView *after* timer!
-  uView.begin();              // start MicroView
+  uView.begin();
   uView.clear(PAGE);
   uView.print("Initiating");
   uView.display();
 
   uView.print("Setting up frequency ");
+
+  //set IR_PIN (4) to 56kHz
   success = SetPinFrequencySafe(IR_PIN, IR_FREQ);
 
   if(!success){
@@ -136,7 +164,7 @@ void setup() {
     pwmWrite(RED_LED,HIGH);
   }
   uView.display();
-  delay(1000);
+
   pwmWrite(RED_LED,LOW);
   pwmWrite(IR_PIN, IR_LOW);
   uView.clear(PAGE);
@@ -162,6 +190,16 @@ void isr() {
 
 
 void loop(){
+  if(count > 100) {
+    count = 0;
+    Serial.println(".");
+  } else {
+    if(looper++ > 100) {
+      Serial.print('.');
+      looper = 0;
+      count++;
+    }
+  }
   //check if rotary switch was turned and add accordingly
   if(turn_detected) {
     if(!up){
@@ -186,19 +224,29 @@ void loop(){
   swt_state = analogRead(SWT_PIN);
 
   if(swt_state < 10){
-    delay(50);  //debounce
+    delay(150);  //debounce
+    count=0;
+    Serial.println("#");
     digitalWrite(RED_LED,HIGH);
     submitting = true;
-    noInterrupts();
     if(menu_index < 5){
-      transmit_code(ir_codes[menu_index]);
+      strcpy_P(buffer, (char*)pgm_read_word(&(ir_codes_table[menu_index])));
+      transmit_code(buffer);
     } else {
       //special treatment for STATS packages
-      for(int i; i < 3; i++) {
-        transmit_code(stats_codes[i]);
+      Serial.println("Transmit stats");
+      delay(500);
+      for(int i=0; i < 3; i++) {
+        void* address   = (void*)pgm_read_word(stat_codes_table + i);
+        Serial.print("Address is ");
+        Serial.println((int)address);
+
+        int code_size = (int)pgm_read_word(stat_code_sizes + i);
+        Serial.print("Codesize is ");
+        Serial.println(code_size);
+        transmit_large(address,code_size);
       }
     }
-    interrupts();
     submitting = false;
     digitalWrite(RED_LED,LOW);
   }
@@ -228,7 +276,10 @@ void draw_main_menu(int current_index){
 
 void transmit_code(String code) {
   int i = 0;
-  Serial.println("BEGIN");
+
+  Serial.println(".");
+  Serial.println("BEGIN transmit code");
+
   pwmWrite(IR_PIN,IR_HIGH);
   delayMicroseconds(IR_HEADER);
   pwmWrite(IR_PIN,IR_LOW);
@@ -246,6 +297,53 @@ void transmit_code(String code) {
     delayMicroseconds(IR_SPACE);
   }
   pwmWrite(IR_PIN,IR_LOW);
+  Serial.println("END");
+};
+
+void transmit_large(void* stat_code, int bytes) {
+  int i,j = 0;
+  int bytes_left = bytes;
+  int bytes_to_read = CHUNK_SIZE;
+  char buffer[CHUNK_SIZE + 1] = {0};
+
+  Serial.println("BEGIN RAW");
+
+  pwmWrite(IR_PIN,IR_HIGH);
+  delayMicroseconds(IR_HEADER);
+  pwmWrite(IR_PIN,IR_LOW);
+  delayMicroseconds(IR_SPACE);
+
+  do{
+    if(bytes_left   > CHUNK_SIZE ){
+      bytes_to_read = CHUNK_SIZE;
+      bytes_left   -= CHUNK_SIZE;
+    } else {
+      bytes_to_read = bytes_left;
+      bytes_left = 0;
+    }
+    void* address = (void*)((int)stat_code + (i * CHUNK_SIZE));
+    memcpy_P(buffer, address, bytes_to_read);
+
+
+    for(j = 0; j < bytes_to_read ;j++){
+      pwmWrite(IR_PIN,IR_HIGH);
+      if(buffer[j]=='1'){
+        delayMicroseconds(IR_ONE);
+      } 
+      else {
+        delayMicroseconds(IR_ZERO);
+      }
+      pwmWrite(IR_PIN,IR_LOW);
+      delayMicroseconds(IR_SPACE);
+    }
+
+    #if defined(DEBUG)
+      Serial.println((char*)buffer);
+    #endif
+    i++;
+  } while(bytes_left > 0);
+
+
   Serial.println("END");
 };
 
